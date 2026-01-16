@@ -55,7 +55,9 @@ export const getCurrentUser = async () => {
 class RoomSyncService {
   private channel: RealtimeChannel | null = null;
   private listeners: ((event: SyncEvent) => void)[] = [];
+  private statusListeners: ((status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR') => void)[] = [];
   private userId: string = '';
+  public isConnected: boolean = false;
 
   constructor() {
     if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -63,36 +65,46 @@ class RoomSyncService {
     }
   }
 
-  public connect(roomId: string, userId: string) {
+  public connect(roomId: string, userId: string): Promise<void> {
     this.disconnect(); // Ensure clean start
-
     this.userId = userId;
+    this.notifyStatus('CONNECTING');
 
-    // Subscribe to a unique channel for the room
-    this.channel = supabase.channel(`room:${roomId}`, {
-      config: {
-        broadcast: { self: false } // Don't receive own messages
-      }
-    });
-
-    this.channel
-      .on(
-        'broadcast',
-        { event: 'sync_event' },
-        (payload) => {
-          // Payload is the message sent
-          if (payload && payload.event) {
-            this.notifyListeners(payload.event as SyncEvent);
-          }
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`[Sync] Connected to Supabase channel: room:${roomId}`);
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error(`[Sync] Failed to connect to Supabase channel`);
+    return new Promise((resolve, reject) => {
+      // Subscribe to a unique channel for the room
+      this.channel = supabase.channel(`room:${roomId}`, {
+        config: {
+          broadcast: { self: false } // Don't receive own messages
         }
       });
+
+      this.channel
+        .on(
+          'broadcast',
+          { event: 'sync_event' },
+          (payload) => {
+            if (payload && payload.event) {
+              this.notifyListeners(payload.event as SyncEvent);
+            }
+          }
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log(`[Sync] Connected to Supabase channel: room:${roomId}`);
+            this.isConnected = true;
+            this.notifyStatus('CONNECTED');
+            resolve();
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error(`[Sync] Failed to connect: ${status}`);
+            this.isConnected = false;
+            this.notifyStatus('ERROR');
+            reject(new Error(status));
+          } else if (status === 'CLOSED') {
+            this.isConnected = false;
+            this.notifyStatus('DISCONNECTED');
+          }
+        });
+    });
   }
 
   public disconnect() {
@@ -100,10 +112,15 @@ class RoomSyncService {
       supabase.removeChannel(this.channel);
       this.channel = null;
     }
+    this.isConnected = false;
+    this.notifyStatus('DISCONNECTED');
   }
 
   public async send(type: SyncEventType, payload: any) {
-    if (!this.channel) return;
+    if (!this.channel || !this.isConnected) {
+      console.warn('[Sync] Cannot send, channel not connected');
+      return;
+    }
 
     const event: SyncEvent = {
       type,
@@ -114,7 +131,7 @@ class RoomSyncService {
     await this.channel.send({
       type: 'broadcast',
       event: 'sync_event',
-      payload: { event }, // Wrapping it to match the listener structure I defined above
+      payload: { event },
     });
   }
 
@@ -125,8 +142,19 @@ class RoomSyncService {
     };
   }
 
+  public onStatusChange(callback: (status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR') => void) {
+    this.statusListeners.push(callback);
+    return () => {
+      this.statusListeners = this.statusListeners.filter(l => l !== callback);
+    };
+  }
+
   private notifyListeners(event: SyncEvent) {
     this.listeners.forEach(l => l(event));
+  }
+
+  private notifyStatus(status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR') {
+    this.statusListeners.forEach(l => l(status));
   }
 }
 

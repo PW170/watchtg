@@ -16,6 +16,7 @@ const Room: React.FC = () => {
 
   // Room State
   const [videoUrl, setVideoUrl] = useState<string>('');
+  const [source, setSource] = useState<VideoSource>(VideoSource.YOUTUBE);
   const [isPlaying, setIsPlaying] = useState(false);
   const [seekTo, setSeekTo] = useState<number>(-1);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -23,11 +24,13 @@ const Room: React.FC = () => {
 
   // Host Controls
   const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [newSourceType, setNewSourceType] = useState<VideoSource>(VideoSource.YOUTUBE);
   const [showControls, setShowControls] = useState(false);
 
   // UI State
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR'>('CONNECTING');
 
   // Refs for state access in callbacks
   const currentTimeRef = useRef<number>(0);
@@ -65,40 +68,56 @@ const Room: React.FC = () => {
     // 2. Restore Video (If Host) or default empty
     const storedVideo = localStorage.getItem(`vibestream_init_video_${roomId}`);
     if (storedVideo && user.isHost) {
-      const { url } = JSON.parse(storedVideo);
+      const { url, source } = JSON.parse(storedVideo);
       setVideoUrl(url);
+      if (source) setSource(source);
     }
 
     // 3. Connect Sync
-    syncService.connect(roomId, user.id);
+    const initSync = async () => {
+      // Subscribe to status changes
+      const cleanupStatus = syncService.onStatusChange(setConnectionStatus);
 
-    // 4. If guest, ask for state
-    if (!user.isHost) {
-      setTimeout(() => {
-        syncService.send(SyncEventType.REQUEST_STATE, {});
-      }, 1000);
-    }
+      try {
+        await syncService.connect(roomId, user.id);
 
-    // 5. System Message
-    const joinMsg: ChatMessage = {
-      id: uuidv4(),
-      userId: 'system',
-      userName: 'System',
-      text: `${user.name} joined the party.`,
-      timestamp: Date.now(),
-      isSystem: true
+        // 4. If guest, ask for state (ONLY after connected)
+        if (!user.isHost) {
+          console.log('[Room] Requesting state from host...');
+          await syncService.send(SyncEventType.REQUEST_STATE, {});
+        }
+
+        // 5. System Message
+        const joinMsg: ChatMessage = {
+          id: uuidv4(),
+          userId: 'system',
+          userName: 'System',
+          text: `${user.name} joined the party.`,
+          timestamp: Date.now(),
+          isSystem: true
+        };
+        await syncService.send(SyncEventType.CHAT_MESSAGE, joinMsg);
+        setMessages(prev => [...prev, joinMsg]);
+
+      } catch (error) {
+        console.error('[Room] Failed to connect sync service:', error);
+      }
+
+      return cleanupStatus;
     };
-    syncService.send(SyncEventType.CHAT_MESSAGE, joinMsg);
-    setMessages(prev => [...prev, joinMsg]);
+
+    const cleanupPromise = initSync();
 
     return () => {
       syncService.disconnect();
+      cleanupPromise.then(cleanup => cleanup && cleanup());
     };
   }, [roomId, navigate]);
 
   // Handle Sync Events
   useEffect(() => {
     const handleSyncEvent = (event: SyncEvent) => {
+      // console.log('[Room] Received Sync Event:', event.type, event.payload); // Verbose log
       switch (event.type) {
         case SyncEventType.PLAY:
           setIsPlaying(true);
@@ -114,7 +133,9 @@ const Room: React.FC = () => {
           setSeekTo(event.payload.time);
           break;
         case SyncEventType.URL_CHANGE:
+          console.log('[Room] URL_CHANGE Received:', event.payload.url);
           setVideoUrl(event.payload.url);
+          setSource(event.payload.source);
           setIsPlaying(false);
           setMessages(prev => [...prev, {
             id: uuidv4(),
@@ -130,24 +151,67 @@ const Room: React.FC = () => {
           break;
         case SyncEventType.REQUEST_STATE:
           if (currentUser?.isHost) {
+            console.log('[Room] Received REQUEST_STATE. Sending SYNC_STATE...');
             syncService.send(SyncEventType.SYNC_STATE, {
               videoUrl: videoUrlRef.current,
+              source: source,
               isPlaying: isPlayingRef.current,
               currentTime: currentTimeRef.current
             });
           }
           break;
         case SyncEventType.SYNC_STATE:
-          if (event.payload.videoUrl) setVideoUrl(event.payload.videoUrl);
-          if (event.payload.isPlaying !== undefined) setIsPlaying(event.payload.isPlaying);
-          if (event.payload.currentTime !== undefined) setSeekTo(event.payload.currentTime);
+          //   console.log('[Room] Processing SYNC_STATE:', event.payload);
+          if (event.payload.videoUrl && event.payload.videoUrl !== videoUrlRef.current) {
+            console.log('[Room] SYNC_STATE: Updating Video URL to', event.payload.videoUrl);
+            setVideoUrl(event.payload.videoUrl);
+          }
+          if (event.payload.source && event.payload.source !== source) {
+            console.log('[Room] SYNC_STATE: Updating Source to', event.payload.source);
+            setSource(event.payload.source);
+          }
+          if (event.payload.isPlaying !== undefined && event.payload.isPlaying !== isPlayingRef.current) {
+            setIsPlaying(event.payload.isPlaying);
+          }
+          // Drift Correction
+          if (event.payload.currentTime !== undefined) {
+            const drift = Math.abs(event.payload.currentTime - currentTimeRef.current);
+            if (drift > 2) {
+              console.log(`[Sync] Drift detected (${drift.toFixed(2)}s). Correcting...`);
+              setSeekTo(event.payload.currentTime);
+            }
+          }
           break;
       }
     };
 
     const unsubscribe = syncService.onEvent(handleSyncEvent);
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [currentUser, source]);
+
+  // Host Heartbeat
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (currentUser?.isHost) {
+      interval = setInterval(() => {
+        //  console.log('[Room] Sending Heartbeat...', { url: videoUrlRef.current });
+        syncService.send(SyncEventType.SYNC_STATE, {
+          videoUrl: videoUrlRef.current,
+          source: source,
+          isPlaying: isPlayingRef.current,
+          currentTime: currentTimeRef.current
+        });
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [currentUser, source, isPlaying]); // Re-create interval if state changes significantly to ensure closure captures fresh state? Actually refs are used in payload construction if we used refs, but we're passing state in previous send.
+  // Wait, the previous send used refs. Let's make sure heartbeat uses refs or fresh state.
+  // We should use refs for the heartbeat payload to avoid re-creating the interval too often, OR just depend on the values.
+  // Let's use refs for the heartbeat payload to be safe and clean.
+  // But wait, the source state isn't in a ref in the original code, I should fix that or use state.
+  // I will use the state variables directly in the dependency array to keep it simple, or add a ref for source. 
+  // Actually, let's just use the state. 
+
 
   // Player Callbacks
   const handleProgress = useCallback((playedSeconds: number) => {
@@ -193,10 +257,11 @@ const Room: React.FC = () => {
     if (!newVideoUrl || !currentUser?.isHost) return;
 
     setVideoUrl(newVideoUrl);
+    setSource(newSourceType);
     setNewVideoUrl('');
     setIsPlaying(false);
     setShowControls(false);
-    syncService.send(SyncEventType.URL_CHANGE, { url: newVideoUrl });
+    syncService.send(SyncEventType.URL_CHANGE, { url: newVideoUrl, source: newSourceType });
   };
 
   const copyInviteLink = () => {
@@ -220,7 +285,10 @@ const Room: React.FC = () => {
           </button>
           <div className="hidden sm:block">
             <h1 className="font-bold text-slate-100 leading-tight">VibeStream</h1>
-            <p className="text-[10px] text-slate-400 uppercase tracking-wider">Room: {roomId?.slice(0, 6)}</p>
+            <p className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <span>Room: {roomId?.slice(0, 6)}</span>
+              <span className={`w-2 h-2 rounded-full ${connectionStatus === 'CONNECTED' ? 'bg-green-500' : connectionStatus === 'CONNECTING' ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'}`} title={`Status: ${connectionStatus}`}></span>
+            </p>
           </div>
         </div>
 
@@ -255,13 +323,31 @@ const Room: React.FC = () => {
             {/* Host Controls Dropdown */}
             {currentUser.isHost && showControls && (
               <div className="w-full max-w-2xl mb-6 bg-surface border border-slate-700 p-4 rounded-xl animate-fade-in-down">
-                <form onSubmit={handleChangeVideo} className="flex gap-2">
-                  <Input
-                    placeholder="Paste new video URL..."
-                    value={newVideoUrl}
-                    onChange={(e) => setNewVideoUrl(e.target.value)}
-                  />
-                  <Button type="submit" variant="secondary">Change</Button>
+                <form onSubmit={handleChangeVideo} className="flex flex-col gap-4">
+                  <div className="flex gap-4">
+                    <button
+                      type="button"
+                      onClick={() => setNewSourceType(VideoSource.YOUTUBE)}
+                      className={`flex-1 py-2 rounded-lg border text-sm transition-colors ${newSourceType === VideoSource.YOUTUBE ? 'bg-violet-500/20 border-violet-500 text-white' : 'border-slate-700 text-slate-400 hover:bg-slate-800'}`}
+                    >
+                      YouTube
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewSourceType(VideoSource.EXTERNAL)}
+                      className={`flex-1 py-2 rounded-lg border text-sm transition-colors ${newSourceType === VideoSource.EXTERNAL ? 'bg-violet-500/20 border-violet-500 text-white' : 'border-slate-700 text-slate-400 hover:bg-slate-800'}`}
+                    >
+                      Web Link
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder={newSourceType === VideoSource.YOUTUBE ? "Paste YouTube link..." : "Paste MP4/Web link..."}
+                      value={newVideoUrl}
+                      onChange={(e) => setNewVideoUrl(e.target.value)}
+                    />
+                    <Button type="submit" variant="secondary">Change</Button>
+                  </div>
                 </form>
               </div>
             )}
@@ -270,6 +356,7 @@ const Room: React.FC = () => {
               <div className="w-full max-w-5xl">
                 <VideoPlayer
                   url={videoUrl}
+                  source={source}
                   isPlaying={isPlaying}
                   seekToTime={seekTo}
                   onProgress={handleProgress}

@@ -1,9 +1,11 @@
 import React, { useRef, useEffect, useState } from 'react';
 import ReactPlayer from 'react-player';
-import { SyncEventType } from '../types';
+import YouTube, { YouTubeProps } from 'react-youtube';
+import { SyncEventType, VideoSource } from '../types';
 
 interface VideoPlayerProps {
   url: string;
+  source: VideoSource;
   isPlaying: boolean;
   seekToTime?: number; // External command to seek
   onProgress: (playedSeconds: number) => void;
@@ -15,6 +17,7 @@ interface VideoPlayerProps {
 
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   url,
+  source,
   isPlaying,
   seekToTime,
   onProgress,
@@ -23,19 +26,75 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onEnded,
   isHost,
 }) => {
-  const playerRef = useRef<ReactPlayer>(null);
+  const reactPlayerRef = useRef<any>(null);
+  const [youtubePlayer, setYoutubePlayer] = useState<any>(null);
   const [ready, setReady] = useState(false);
-  
+
+  // Helper to extract YouTube ID
+  const getYouTubeID = (url: string) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+  };
+
   // Handle seeking when the prop changes
   useEffect(() => {
-    if (seekToTime !== undefined && seekToTime >= 0 && playerRef.current) {
-      // Avoid seeking if strictly close to current time to prevent loops
-      const current = playerRef.current.getCurrentTime();
-      if (Math.abs(current - seekToTime) > 1.5) {
-        playerRef.current.seekTo(seekToTime, 'seconds');
+    if (seekToTime !== undefined && seekToTime >= 0) {
+      if (source === VideoSource.YOUTUBE && youtubePlayer) {
+        const current = youtubePlayer.getCurrentTime();
+        if (Math.abs(current - seekToTime) > 1.5) {
+          youtubePlayer.seekTo(seekToTime);
+        }
+      } else if (reactPlayerRef.current) {
+        const current = reactPlayerRef.current.getCurrentTime();
+        if (Math.abs(current - seekToTime) > 1.5) {
+          reactPlayerRef.current.seekTo(seekToTime, 'seconds');
+        }
       }
     }
-  }, [seekToTime]);
+  }, [seekToTime, source, youtubePlayer]);
+
+  // Handle Play/Pause for YouTube Iframe manually if props change (ReactPlayer handles this internally, react-youtube needs imperative)
+  useEffect(() => {
+    if (source === VideoSource.YOUTUBE && youtubePlayer) {
+      if (isPlaying) {
+        if (youtubePlayer.getPlayerState() !== 1) youtubePlayer.playVideo();
+      } else {
+        if (youtubePlayer.getPlayerState() === 1) youtubePlayer.pauseVideo();
+      }
+    }
+  }, [isPlaying, source, youtubePlayer]);
+
+
+  // YouTube Event Handlers
+  const onYouTubeReady = (event: any) => {
+    setYoutubePlayer(event.target);
+    setReady(true);
+  };
+
+  const onYouTubeStateChange = (event: any) => {
+    // 1 = Playing, 2 = Paused, 0 = Ended
+    if (event.data === 1) {
+      onPlay();
+    } else if (event.data === 2) {
+      onPause();
+    } else if (event.data === 0) {
+      onEnded();
+    }
+  };
+
+  // Interval for YouTube Progress (Native API doesn't have a clean onProgress like ReactPlayer)
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (source === VideoSource.YOUTUBE && isPlaying && youtubePlayer) {
+      interval = setInterval(() => {
+        const currentTime = youtubePlayer.getCurrentTime();
+        onProgress(currentTime);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [source, isPlaying, youtubePlayer, onProgress]);
+
 
   // A helper to block restricted URLs
   const isRestricted = (testUrl: string) => {
@@ -53,34 +112,56 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }
 
+  // Render YouTube IFrame
+  if (source === VideoSource.YOUTUBE) {
+    const videoId = getYouTubeID(url);
+    if (!videoId) {
+      return <div className="w-full h-full flex items-center justify-center bg-black text-slate-400">Invalid YouTube URL</div>;
+    }
+
+    const opts: YouTubeProps['opts'] = {
+      height: '100%',
+      width: '100%',
+      playerVars: {
+        autoplay: isPlaying ? 1 : 0,
+        controls: 1, // User can use controls
+        modestbranding: 1,
+        rel: 0,
+      },
+    };
+
+    return (
+      <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl shadow-black/50 ring-1 ring-slate-800">
+        <YouTube
+          videoId={videoId}
+          opts={opts}
+          onReady={onYouTubeReady}
+          onStateChange={onYouTubeStateChange}
+          className="w-full h-full"
+          iframeClassName="w-full h-full"
+        />
+      </div>
+    );
+  }
+
+  // Render External Player (ReactPlayer)
   return (
     <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl shadow-black/50 ring-1 ring-slate-800">
       <ReactPlayer
-        ref={playerRef}
+        ref={reactPlayerRef}
         url={url}
         width="100%"
         height="100%"
         playing={isPlaying}
-        controls={true} // We allow native controls for simplicity in this demo, though custom controls are better for strict sync
+        controls={true}
         onReady={() => setReady(true)}
-        onProgress={(state) => {
-          // Only send progress if playing
+        onProgress={(state: any) => {
           if (isPlaying) onProgress(state.playedSeconds);
         }}
         onPlay={onPlay}
         onPause={onPause}
         onEnded={onEnded}
-        config={{
-          youtube: {
-            playerVars: { showinfo: 1 }
-          }
-        }}
       />
-      
-      {/* Overlay to prevent non-hosts from messing with playback? 
-          For this user request, usually all users can control, or just host. 
-          We will let anyone control for a "collaborative" feel, but could block here with a div if !isHost 
-      */}
     </div>
   );
 };

@@ -1,5 +1,6 @@
 export enum VideoSource {
   YOUTUBE = 'YOUTUBE',
+  GOOGLE_DRIVE = 'GOOGLE_DRIVE',
   EXTERNAL = 'EXTERNAL',
 }
 
@@ -47,4 +48,24 @@ export interface SyncEvent {
 
 export interface AdConfig {
   showAds: boolean;
+}
+
+// Database Interfaces
+export interface Room {
+  id: string;
+  code: string;
+  video_url: string;
+  source: VideoSource;
+  is_playing: boolean;
+  current_time: number;
+  last_updated: string;
+}
+
+export interface RoomEventDB {
+  id: string;
+  room_id: string;
+  event_type: SyncEventType;
+  payload: any;
+  created_at: string;
+  sender_id: string;
 }

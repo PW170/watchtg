@@ -52,12 +52,54 @@ export const getCurrentUser = async () => {
   return user;
 };
 
+// Database API
+export const getRoom = async (roomCode: string) => {
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('*')
+    .eq('code', roomCode)
+    .single();
+  return { data, error };
+};
+
+export const createRoom = async (roomCode: string, initialState: any) => {
+  const { data, error } = await supabase
+    .from('rooms')
+    .upsert([{
+      code: roomCode,
+      ...initialState
+    }], { onConflict: 'code' })
+    .select()
+    .single();
+  return { data, error };
+};
+
+export const updateRoom = async (roomId: string, updates: any) => {
+  const { error } = await supabase
+    .from('rooms')
+    .update(updates)
+    .eq('id', roomId);
+  return { error };
+};
+
+export const createRoomEvent = async (roomId: string, eventType: string, payload: any, senderId: string) => {
+  const { error } = await supabase
+    .from('room_events')
+    .insert([{
+      room_id: roomId,
+      event_type: eventType,
+      payload,
+      sender_id: senderId
+    }]);
+  return { error };
+};
+
 class RoomSyncService {
   private channel: RealtimeChannel | null = null;
   private listeners: ((event: SyncEvent) => void)[] = [];
   private statusListeners: ((status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR') => void)[] = [];
-  private userId: string = '';
-  public isConnected: boolean = false;
+  private roomId: string = ''; // Key DB ID
+  private roomCode: string = '';
 
   constructor() {
     if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -65,37 +107,68 @@ class RoomSyncService {
     }
   }
 
-  public connect(roomId: string, userId: string): Promise<void> {
-    this.disconnect(); // Ensure clean start
-    this.userId = userId;
+  public async connect(roomCode: string, dbRoomId: string): Promise<void> {
+    this.disconnect();
+    this.roomId = dbRoomId;
+    this.roomCode = roomCode;
     this.notifyStatus('CONNECTING');
 
     return new Promise((resolve, reject) => {
-      // Subscribe to a unique channel for the room
-      this.channel = supabase.channel(`room:${roomId}`, {
-        config: {
-          broadcast: { self: false } // Don't receive own messages
-        }
-      });
-
-      this.channel
+      this.channel = supabase.channel(`room-${dbRoomId}`)
+        // Listen for new events (Chat, etc.)
         .on(
-          'broadcast',
-          { event: 'sync_event' },
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'room_events',
+            filter: `room_id=eq.${dbRoomId}`
+          },
           (payload) => {
-            if (payload && payload.event) {
-              this.notifyListeners(payload.event as SyncEvent);
-            }
+            const newEvent = payload.new as any;
+            // Map DB event to SyncEvent
+            const syncEvent: SyncEvent = {
+              type: newEvent.event_type as SyncEventType,
+              payload: newEvent.payload,
+              senderId: newEvent.sender_id
+            };
+            this.notifyListeners(syncEvent);
+          }
+        )
+        // Listen for Room State updates (Video URL, Play/Pause)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'rooms',
+            filter: `id=eq.${dbRoomId}`
+          },
+          (payload) => {
+            const newRoom = payload.new as any;
+            // Synthesize a STATE update event
+            const syncEvent: SyncEvent = {
+              type: SyncEventType.SYNC_STATE,
+              payload: {
+                videoUrl: newRoom.video_url,
+                source: newRoom.source,
+                isPlaying: newRoom.is_playing,
+                currentTime: newRoom.current_time,
+                lastUpdated: newRoom.last_updated
+              },
+              senderId: 'system'
+            };
+            this.notifyListeners(syncEvent);
           }
         )
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
-            console.log(`[Sync] Connected to Supabase channel: room:${roomId}`);
+            console.log(`[Sync] Connected to DB channel for room: ${roomCode} (${dbRoomId})`);
             this.isConnected = true;
             this.notifyStatus('CONNECTED');
             resolve();
           } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.error(`[Sync] Failed to connect: ${status}`);
+            console.error(`[Sync] Connection failed: ${status}`);
             this.isConnected = false;
             this.notifyStatus('ERROR');
             reject(new Error(status));
@@ -116,24 +189,17 @@ class RoomSyncService {
     this.notifyStatus('DISCONNECTED');
   }
 
-  public async send(type: SyncEventType, payload: any) {
-    if (!this.channel || !this.isConnected) {
-      console.warn('[Sync] Cannot send, channel not connected');
-      return;
-    }
+  // Helper to send events implies interacting with DB now
+  // We'll keep this method signature but implement it via DB calls
+  // However, Room.tsx might need to call updateRoom directly for state changes.
+  // We can facilitate that here or let Room.tsx call the exported functions.
+  // For backward compatibility with Room.tsx mostly, let's proxy.
+  // BUT: `send` was async void, `updateRoom` is async {error}.
 
-    const event: SyncEvent = {
-      type,
-      payload,
-      senderId: this.userId,
-    };
+  // NOTE: In the new architecture, "Sending" a PLAY event means Updating the Room DB.
+  // "Sending" a CHAT event means Inserting into RoomEvents.
 
-    await this.channel.send({
-      type: 'broadcast',
-      event: 'sync_event',
-      payload: { event },
-    });
-  }
+  public isConnected: boolean = false;
 
   public onEvent(callback: (event: SyncEvent) => void) {
     this.listeners.push(callback);

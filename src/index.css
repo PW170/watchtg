@@ -1,0 +1,209 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Core Palette - Refined Dark */
+  --bg-void: #050506;
+  --bg-page: #0a0a0c;
+  --bg-elevated: #111114;
+  --bg-surface: #18181c;
+
+  --border-dim: rgba(255, 255, 255, 0.04);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  --text-primary: #f4f4f5;
+  --text-secondary: #a3a3a8;
+  --text-tertiary: #63636b;
+
+  /* Accent - Refined violet with electric undertones */
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-muted: rgba(139, 92, 246, 0.15);
+  --accent-glow: rgba(139, 92, 246, 0.25);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  line-height: 1.5;
+}
+
+/* Display font for headings - Space Grotesk for character */
+h1,
+h2,
+h3 {
+  font-family: 'Space Grotesk', sans-serif;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+}
+
+h4,
+h5,
+h6 {
+  font-family: 'Inter', sans-serif;
+  letter-spacing: -0.01em;
+  font-weight: 500;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-muted);
+  color: var(--text-primary);
+}
+
+/* Scrollbar - Minimal */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* Keyframe Animations */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-soft {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Utility Classes */
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.4s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out forwards;
+}
+
+/* Glow Effects */
+.glow-accent {
+  box-shadow: 0 0 20px var(--accent-glow), 0 0 40px var(--accent-glow);
+}
+
+.glow-white {
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.05);
+}
+
+/* Text Gradient */
+.text-gradient {
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Surface Styles */
+.surface {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+}
+
+.surface-elevated {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-dim);
+  border-radius: 12px;
+}
+
+/* Focus Ring */
+.focus-ring:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-page), 0 0 0 4px var(--accent);
+}
+
+/* Noise Texture Overlay */
+.noise::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+/* Grid Pattern */
+.grid-pattern {
+  background-image:
+    linear-gradient(var(--border-dim) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-dim) 1px, transparent 1px);
+  background-size: 40px 40px;
+}

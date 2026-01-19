@@ -122,16 +122,21 @@ class RoomSyncService {
             event: 'INSERT',
             schema: 'public',
             table: 'room_events',
-            filter: `room_id=eq.${dbRoomId}`
           },
           (payload) => {
+            // console.log('[SyncService] Raw DB Event:', payload);
             const newEvent = payload.new as any;
+            if (!newEvent) {
+              console.warn('[SyncService] Received event with no new data:', payload);
+              return;
+            }
             // Map DB event to SyncEvent
             const syncEvent: SyncEvent = {
               type: newEvent.event_type as SyncEventType,
               payload: newEvent.payload,
               senderId: newEvent.sender_id
             };
+            console.log('[SyncService] Dispatching Event:', syncEvent);
             this.notifyListeners(syncEvent);
           }
         )

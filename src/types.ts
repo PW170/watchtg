@@ -1,6 +1,7 @@
 export enum VideoSource {
   YOUTUBE = 'YOUTUBE',
   GOOGLE_DRIVE = 'GOOGLE_DRIVE',
+  STREAMABLE = 'STREAMABLE',
   EXTERNAL = 'EXTERNAL',
 }
 
@@ -38,6 +39,8 @@ export enum SyncEventType {
   USER_JOIN = 'USER_JOIN',
   REQUEST_STATE = 'REQUEST_STATE',
   SYNC_STATE = 'SYNC_STATE',
+  SYNC_TIME = 'SYNC_TIME',
+  VOICE_STATE = 'VOICE_STATE',
 }
 
 export interface SyncEvent {
